@@ -13,9 +13,16 @@
 </head>
 <body>
     <canvas id="game" tabindex="0"></canvas>
-    <script type="module" src="main.js"></script>
 
-    <!-- PWA Service Worker Registration -->
+    <!-- Кнопка Share (появляется только при Game Over) -->
+    <button id="shareBtn" style="display:none;position:fixed;bottom:24px;right:24px;
+            padding:12px 20px;font:600 16px/1 sans-serif;border:0;border-radius:12px;
+            background:#00f5e1;color:#011627;box-shadow:0 4px 12px rgb(0 255 245 / .4);
+            backdrop-filter:blur(6px); cursor: pointer; z-index: 100;">
+      Поделиться
+    </button>
+
+    <script type="module" src="main.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {

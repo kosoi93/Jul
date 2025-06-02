@@ -1,0 +1,25 @@
+name: lighthouse
+on:
+  deployment_status
+
+jobs:
+  lhci:
+    if: github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4 # To get budget.json
+
+      - name: Setup Node.js # Added for npm global installs
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli
+
+      - name: Run Lighthouse CI
+        run: |
+          lhci autorun             --collect.url="${{ github.event.deployment_status.environment_url }}"             --upload.target=temporary-public-storage             --assert.budgetsFile=./budget.json
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }} # Optional, for PR checks

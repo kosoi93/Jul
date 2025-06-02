@@ -1,0 +1,119 @@
+name: build
+on:
+  push:
+    branches: [main]
+
+env:
+  ESBUILD_VERSION: v0.21.0
+  DIST_DIR: dist
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js # Added for npm global installs
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache esbuild
+        id: cache-esbuild
+        uses: actions/cache@v4
+        with:
+          path: esbuild
+          key: esbuild-${{ env.ESBUILD_VERSION }}-linux
+
+      - name: Download esbuild
+        if: steps.cache-esbuild.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL https://github.com/evanw/esbuild/releases/download/${{ env.ESBUILD_VERSION }}/esbuild-linux-64.tgz           | tar -xz
+          # esbuild binary is now in the current directory, named 'esbuild'
+
+      - name: Install html‑minifier‑terser
+        run: npm install -g html-minifier-terser
+
+      # --------  Новые шаги: оптимизация ассетов  --------
+      - name: Install Squoosh CLI & FFmpeg
+        run: |
+          npm install -g @squoosh/cli
+          sudo apt-get update -y && sudo apt-get install -y ffmpeg
+
+      - name: Optimize images (WebP + AVIF)
+        run: |
+          mkdir -p _opt/assets/sprites
+          # Check if src/assets/sprites exists and has PNG files
+          if [ -d "src/assets/sprites" ] && [ "$(ls -A src/assets/sprites/*.png 2>/dev/null)" ]; then
+            for img in src/assets/sprites/*.png; do
+              npx -y @squoosh/cli --webp '{"quality":75}' --avif '{"cqLevel":33}' "$img" -d _opt/$(dirname "$img" | cut -c5-)
+            done
+          else
+            echo "No PNG images found in src/assets/sprites or directory does not exist. Skipping image optimization."
+            mkdir -p _opt/assets/sprites # Ensure directory exists even if empty
+          fi
+
+      - name: Copy original PNG sprites for Canvas fallback
+        run: |
+          # Ensure the target directory exists, though Optimize images should have created it.
+          mkdir -p _opt/assets/sprites
+          # Check if source PNGs exist before attempting to copy
+          if ls src/assets/sprites/*.png 1> /dev/null 2>&1; then
+            echo "Copying original PNGs to _opt/assets/sprites/ for Canvas fallback..."
+            cp src/assets/sprites/*.png _opt/assets/sprites/
+          else
+            echo "No PNG files found in src/assets/sprites/ to copy for fallback."
+          fi
+
+      - name: Convert OGG to MP3 (fallback)
+        run: |
+          mkdir -p _opt/assets/audio
+          # Check if src/assets/audio exists and has OGG files
+          if [ -d "src/assets/audio" ] && [ "$(ls -A src/assets/audio/*.ogg 2>/dev/null)" ]; then
+            for aud in src/assets/audio/*.ogg; do
+              base=$(basename "$aud" .ogg)
+              cp "$aud" "_opt/assets/audio/${base}.ogg" # Copy original OGG
+              ffmpeg -loglevel error -i "$aud" -codec:a libmp3lame -qscale:a 4 "_opt/assets/audio/${base}.mp3"
+            done
+          else
+            echo "No OGG audio files found in src/assets/audio or directory does not exist. Skipping audio conversion."
+            mkdir -p _opt/assets/audio # Ensure directory exists even if empty
+          fi
+
+      - name: Build & minify
+        run: |
+          mkdir -p ${{ env.DIST_DIR }}
+          if [ -f "./esbuild" ]; then chmod +x ./esbuild; else echo "esbuild not found"; exit 1; fi
+
+          BUILD_VERSION_SHA="${{ github.sha }}"
+          echo "Using BUILD_VERSION_SHA: $BUILD_VERSION_SHA for bundle versioning"
+          ./esbuild src/main.js --bundle --minify --sourcemap '--define:BUILD_VERSION="'"$BUILD_VERSION_SHA"'"' --outfile=${{ env.DIST_DIR }}/bundle.js
+
+          html-minifier-terser src/index.html             --collapse-whitespace --remove-comments             -o ${{ env.DIST_DIR }}/index.html
+
+          # Copy static files (CSS, manifest, SW)
+          cp src/styles.css ${{ env.DIST_DIR }}/
+          cp src/manifest.json ${{ env.DIST_DIR }}/
+          cp src/service-worker.js ${{ env.DIST_DIR }}/
+
+          # Копируем оптимизированные ассеты
+          if [ -d "_opt/assets" ]; then
+            cp -R _opt/assets ${{ env.DIST_DIR }}/
+          else
+            echo "Warning: _opt/assets directory not found. Creating empty assets dir in dist."
+            mkdir -p ${{ env.DIST_DIR }}/assets
+          fi
+          # cp budget.json ${{ env.DIST_DIR }}/ # Only if budget.json is needed by deployed site
+
+      - name: Gzip size check
+        run: |
+          gzip -c ${{ env.DIST_DIR }}/bundle.js | wc -c | xargs echo "bundle.js gzip size (bytes):"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          publish_dir: ${{ env.DIST_DIR }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # cname: your.custom.domain # If you have one
